@@ -160,6 +160,47 @@ test('重心边界：演示方案全绿；过度前装触发前限报警', async
   await expect(page.getByTestId('global-status')).toContainText('项不符');
 });
 
+test('草案锁定校验：错误草案锁定被拒，修正后锁定成功', async ({ page }) => {
+  // 正确草案 → 锁定成功
+  await page.getByTestId('btn-load-demo').click();
+  await expect(page.getByTestId('global-status')).toContainText('草案：全部约束通过');
+  await page.getByTestId('btn-lock').click();
+  await expect(page.getByTestId('tag-locked')).toBeVisible();
+  await page.getByTestId('btn-unlock').click();
+  await expect(page.getByTestId('tag-editing')).toBeVisible();
+
+  // 错误草案（重心出包线）→ 锁定被拒，仍是草案
+  await page.getByTestId('pos-M3').click();
+  await page.getByTestId('btn-remove').click();
+  await page.getByTestId('pos-M8').click();
+  await page.getByTestId('btn-place').click();
+  await page.getByTestId('transfer-amount').locator('input').fill('6000');
+  await page.getByTestId('btn-transfer').click();
+  await expect(page.getByTestId('global-status')).toContainText('项不符');
+  await page.getByTestId('btn-lock').click();
+  await expect(page.getByTestId('error-list')).toContainText('不能形成正式方案');
+  await expect(page.getByTestId('error-list')).toContainText('后于包线后限');
+  await expect(page.getByTestId('tag-locked')).toBeHidden();
+  await expect(page.getByTestId('tag-editing')).toBeVisible();
+
+  // 修正重心，再制造燃油规则错误（耗油超过机载燃油）→ 锁定仍被拒
+  await page.evaluate(() => window.__app.store.getState().transferFuel('STAB', 'CTR', 6000));
+  await expect(page.getByTestId('global-status')).toContainText('全部约束通过');
+  await page.getByTestId('burn-2').locator('input').fill('200000');
+  await page.keyboard.press('Enter');
+  await page.getByTestId('btn-lock').click();
+  await expect(page.getByTestId('error-list')).toContainText('不能形成正式方案');
+  await expect(page.getByTestId('error-list')).toContainText('燃油不足');
+  await expect(page.getByTestId('tag-locked')).toBeHidden();
+
+  // 修正耗油 → 锁定成功
+  await page.getByTestId('burn-2').locator('input').fill('30000');
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('global-status')).toContainText('全部约束通过');
+  await page.getByTestId('btn-lock').click();
+  await expect(page.getByTestId('tag-locked')).toBeVisible();
+});
+
 test('多航段燃油变化：逐段累计重量与重心正确，改耗油逐级联，燃油不足报警', async ({ page }) => {
   await page.getByTestId('btn-load-demo').click();
 

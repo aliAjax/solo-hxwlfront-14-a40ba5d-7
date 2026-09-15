@@ -12,7 +12,7 @@ export default function StagingPanel() {
         <Button type="primary" onClick={enterStaging} data-testid="btn-enter-staging">
           进入演练区
         </Button>
-        {!locked && <p className="muted" style={{ marginTop: 8 }}>提示：正式方案未锁定时可直接编制；锁定后一切改动只能经演练区确认。</p>}
+        {!locked && <p className="muted" style={{ marginTop: 8 }}>提示：草案阶段可直接修改；点击“锁定为正式方案”时会重新校验全部放置、隔离、重量重心与燃油规则，任一不通过即不能锁定。锁定后一切改动只能经演练区确认。</p>}
       </div>
     );
   }

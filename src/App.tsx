@@ -31,10 +31,10 @@ export default function App() {
           <span className="flight-info">航班 CA1041 ｜ 机型 {AIRCRAFT.type} ｜ 航路 PEK–PVG–HKG–SIN</span>
         </div>
         <Space wrap>
-          {locked ? <Tag color="gold" data-testid="tag-locked">正式方案已锁定</Tag> : <Tag data-testid="tag-editing">计划编制中</Tag>}
+          {locked ? <Tag color="gold" data-testid="tag-locked">正式方案（已锁定）</Tag> : <Tag data-testid="tag-editing">草案（未锁定）</Tag>}
           {staging.active && <Tag color="purple" data-testid="tag-staging">演练中（未确认）</Tag>}
           <Tag color={ok ? 'green' : 'red'} data-testid="global-status">
-            {ok ? '正式方案：全部约束通过' : `正式方案：${officialResult.issues.length} 项不符`}
+            {locked ? '正式方案' : '草案'}：{ok ? '全部约束通过' : `${officialResult.issues.length} 项不符`}
           </Tag>
           <Button size="small" onClick={loadDemo} data-testid="btn-load-demo">载入演示方案</Button>
           {locked
@@ -44,17 +44,17 @@ export default function App() {
         </Space>
       </header>
 
-      {lastErrors.length > 0 && (
+      {lastErrors && (
         <Alert
           type="error"
           showIcon
           closable
           className="error-bar"
           data-testid="error-list"
-          message="不能落位 / 操作被拒绝"
+          message={lastErrors.title}
           description={
             <ul className="issue-list">
-              {lastErrors.map((e, i) => <li key={i}>{e}</li>)}
+              {lastErrors.items.map((e, i) => <li key={i}>{e}</li>)}
             </ul>
           }
         />

@@ -232,6 +232,26 @@ function checkCg(issues: string[], phase: string, w: number, cg: number): void {
   if (st === 'aft') issues.push(`${phase}重心 ${fmtCg(cg)} 后于包线后限 ${fmtCg(aftLimit(w))}`);
 }
 
+// ---------------------------------------------------------------- 全量校验
+
+/**
+ * 草案锁定 / 演练确认前的全量校验：
+ * 逐件复核放置约束（限重、尺寸、温控、危险品隔离、舱段累计）
+ * + 逐航段重量重心（包线、结构限重）与燃油规则。
+ */
+export function validatePlanFull(plan: Plan, ac: Aircraft = AIRCRAFT): string[] {
+  const issues: string[] = [];
+  for (const [uldId, posId] of Object.entries(plan.placements)) {
+    const rest: Plan = {
+      ...plan,
+      placements: Object.fromEntries(Object.entries(plan.placements).filter(([id]) => id !== uldId)),
+    };
+    issues.push(...checkPlacement(rest, uldId, posId).errors);
+  }
+  issues.push(...computePlan(plan, ac).issues);
+  return [...new Set(issues)];
+}
+
 // ---------------------------------------------------------------- 配平建议
 
 /** 针对指定航段给出前后配平建议（基于起飞重心） */

@@ -1,7 +1,7 @@
-// 状态管理：正式方案 + 演练区（未确认改动不进入正式方案）
+// 状态管理：草案 →（全量校验）→ 正式方案 →（只能演练区调整，确认后并入）
 import { create } from 'zustand';
 import { AIRCRAFT, COMPARTMENTS, DEMO_PLACEMENTS, POSITIONS, emptyPlan } from './data';
-import { checkPlacement, computePlan, totalFuel } from './core';
+import { checkPlacement, computePlan, totalFuel, validatePlanFull } from './core';
 import type { Plan, PlanResult, Uld } from './types';
 
 export interface StagingState {
@@ -11,18 +11,23 @@ export interface StagingState {
   validation: { ok: boolean; issues: string[] } | null;
 }
 
+export interface ErrorBox {
+  title: string;
+  items: string[];
+}
+
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 
 const EMPTY_STAGING: StagingState = { active: false, working: emptyPlan(), ops: [], validation: null };
 
 interface AppState {
-  plan: Plan;
+  plan: Plan;                  // 当前方案：未锁定=草案，已锁定=正式方案
   locked: boolean;
   staging: StagingState;
   selectedUld: string | null;
   selectedPos: string | null;
-  lastErrors: string[];
-  officialResult: PlanResult;        // 正式方案逐航段结果（派生）
+  lastErrors: ErrorBox | null;
+  officialResult: PlanResult;        // 当前方案逐航段结果（派生）
   stagingResult: PlanResult | null;  // 演练工作副本逐航段结果（派生）
 
   selectUld: (id: string | null) => void;
@@ -44,12 +49,12 @@ interface AppState {
   confirmStaging: () => void;
 }
 
-/** 当前可编辑的方案：演练中→工作副本，否则→正式方案 */
+/** 当前可编辑的方案：演练中→工作副本，否则→当前方案（草案/正式） */
 function target(s: Pick<AppState, 'plan' | 'staging'>): Plan {
   return s.staging.active ? s.staging.working : s.plan;
 }
 
-/** 是否允许直接编辑（正式方案锁定后，只能走演练区） */
+/** 是否允许直接编辑：正式方案锁定后，一切改动只能经演练区 */
 function editable(s: Pick<AppState, 'locked' | 'staging'>): boolean {
   return !s.locked || s.staging.active;
 }
@@ -68,11 +73,15 @@ export const useStore = create<AppState>((set, get) => {
     set({ ...partial, ...derive(next.plan, next.staging) });
   };
 
+  const fail = (title: string, items: string[]) => set({ lastErrors: { title, items } });
+  const clearErrors = () => set({ lastErrors: null });
+  const lockedError = () => fail('操作被拒绝', ['正式方案已锁定：临时加货 / 转油 / 航段调整请先进入演练区']);
+
   /** 对当前目标方案做一次修改；演练中自动记录操作并使上次校验失效 */
   const mutate = (opLabel: string, fn: (p: Plan) => void): boolean => {
     const s = get();
     if (!editable(s)) {
-      set({ lastErrors: ['正式方案已锁定：临时加货 / 配平调整请先进入演练区'] });
+      lockedError();
       return false;
     }
     if (s.staging.active) {
@@ -87,15 +96,13 @@ export const useStore = create<AppState>((set, get) => {
     return true;
   };
 
-  const lockedError = () => set({ lastErrors: ['正式方案已锁定：临时加货 / 配平调整请先进入演练区'] });
-
   return {
     plan: emptyPlan(),
     locked: false,
     staging: EMPTY_STAGING,
     selectedUld: null,
     selectedPos: null,
-    lastErrors: [],
+    lastErrors: null,
     ...derive(emptyPlan(), EMPTY_STAGING),
 
     selectUld: (id) => set({ selectedUld: id }),
@@ -104,7 +111,7 @@ export const useStore = create<AppState>((set, get) => {
     place: () => {
       const s = get();
       if (!s.selectedUld || !s.selectedPos) {
-        set({ lastErrors: ['请先在右侧选择集装器，再在舱位图中选择舱位'] });
+        fail('操作被拒绝', ['请先在右侧选择集装器，再在舱位图中选择舱位']);
         return;
       }
       if (!editable(s)) {
@@ -114,13 +121,16 @@ export const useStore = create<AppState>((set, get) => {
       const cur = target(s);
       const check = checkPlacement(cur, s.selectedUld, s.selectedPos, POSITIONS, COMPARTMENTS);
       if (!check.ok) {
-        set({ lastErrors: check.errors });
+        fail('不能落位', check.errors);
         return;
       }
       const ok = mutate(`装机 ${s.selectedUld} → ${s.selectedPos}`, (p) => {
         p.placements[s.selectedUld!] = s.selectedPos!;
       });
-      if (ok) set({ lastErrors: [], selectedUld: null, selectedPos: null });
+      if (ok) {
+        clearErrors();
+        set({ selectedUld: null, selectedPos: null });
+      }
     },
 
     removeAt: (posId) => {
@@ -131,7 +141,7 @@ export const useStore = create<AppState>((set, get) => {
       const ok = mutate(`卸下 ${entry[0]}（${posId}）`, (p) => {
         delete p.placements[entry[0]];
       });
-      if (ok) set({ lastErrors: [] });
+      if (ok) clearErrors();
     },
 
     setFuel: (tank, kg) => {
@@ -151,14 +161,14 @@ export const useStore = create<AppState>((set, get) => {
       const room = toTank.cap - (cur.fuel[to] ?? 0);
       const v = Math.min(kg, avail, room);
       if (v <= 0) {
-        set({ lastErrors: [`转油不可行：${fromTank.name} 可用 ${avail.toLocaleString('zh-CN')} kg，${toTank.name} 剩余容量 ${room.toLocaleString('zh-CN')} kg`] });
+        fail('转油不可行', [`${fromTank.name} 可用 ${avail.toLocaleString('zh-CN')} kg，${toTank.name} 剩余容量 ${room.toLocaleString('zh-CN')} kg`]);
         return;
       }
       const ok = mutate(`燃油配平 ${fromTank.name} → ${toTank.name} ${v.toLocaleString('zh-CN')} kg`, (p) => {
         p.fuel[from] -= v;
         p.fuel[to] += v;
       });
-      if (ok) set({ lastErrors: [] });
+      if (ok) clearErrors();
     },
 
     setBurn: (i, kg) => {
@@ -180,57 +190,63 @@ export const useStore = create<AppState>((set, get) => {
     addUld: (u) => {
       const s = get();
       if (target(s).ulds.some((x) => x.id === u.id)) {
-        set({ lastErrors: [`集装器号 ${u.id} 已存在`] });
+        fail('新增集装器失败', [`集装器号 ${u.id} 已存在`]);
         return;
       }
       const ok = mutate(`新增集装器 ${u.id}`, (p) => {
         p.ulds.push(u);
       });
-      if (ok) set({ lastErrors: [] });
+      if (ok) clearErrors();
     },
 
     loadDemo: () => {
       const ok = mutate('载入演示方案', (p) => {
         p.placements = { ...DEMO_PLACEMENTS };
       });
-      if (ok) set({ lastErrors: [], selectedUld: null, selectedPos: null });
+      if (ok) {
+        clearErrors();
+        set({ selectedUld: null, selectedPos: null });
+      }
     },
 
     resetAll: () => {
       const plan = emptyPlan();
-      commit({ plan, locked: false, staging: { ...EMPTY_STAGING, working: clone(plan) }, selectedUld: null, selectedPos: null, lastErrors: [] });
+      commit({ plan, locked: false, staging: { ...EMPTY_STAGING, working: clone(plan) }, selectedUld: null, selectedPos: null, lastErrors: null });
     },
 
-    lock: () => set({ locked: true, lastErrors: [] }),
+    /** 锁定为正式方案：先全量校验（放置/隔离/重量重心/燃油），任一项不通过即拒绝 */
+    lock: () => {
+      const s = get();
+      if (s.locked) return;
+      const issues = validatePlanFull(s.plan);
+      if (issues.length > 0) {
+        fail(`草案校验未通过（${issues.length} 项），不能形成正式方案`, issues);
+        return;
+      }
+      set({ locked: true, lastErrors: null });
+    },
+
     unlock: () => set({ locked: false }),
 
     enterStaging: () => {
       const s = get();
       if (s.staging.active) return;
-      commit({ staging: { active: true, working: clone(s.plan), ops: [], validation: null }, lastErrors: [] });
+      commit({ staging: { active: true, working: clone(s.plan), ops: [], validation: null }, lastErrors: null });
     },
 
-    discardStaging: () => commit({ staging: { ...EMPTY_STAGING, working: clone(get().plan) }, lastErrors: [] }),
+    discardStaging: () => commit({ staging: { ...EMPTY_STAGING, working: clone(get().plan) }, lastErrors: null }),
 
     validateStaging: () => {
       const s = get();
       if (!s.staging.active) return;
-      // 全量复核：逐件放置约束 + 逐航段重量重心 + 燃油
-      const issues: string[] = [];
-      const w = s.staging.working;
-      for (const [uldId, posId] of Object.entries(w.placements)) {
-        const rest: Plan = { ...w, placements: Object.fromEntries(Object.entries(w.placements).filter(([id]) => id !== uldId)) };
-        const c = checkPlacement(rest, uldId, posId, POSITIONS, COMPARTMENTS);
-        issues.push(...c.errors);
-      }
-      issues.push(...computePlan(w).issues);
+      const issues = validatePlanFull(s.staging.working);
       commit({ staging: { ...s.staging, validation: { ok: issues.length === 0, issues } } });
     },
 
     confirmStaging: () => {
       const s = get();
       if (!s.staging.active || !s.staging.validation?.ok) return;
-      commit({ plan: clone(s.staging.working), staging: { ...EMPTY_STAGING, working: emptyPlan() }, lastErrors: [] });
+      commit({ plan: clone(s.staging.working), staging: { ...EMPTY_STAGING, working: emptyPlan() }, lastErrors: null });
     },
   };
 });
@@ -239,7 +255,7 @@ export const useStore = create<AppState>((set, get) => {
 if (typeof window !== 'undefined') {
   (window as unknown as { __app: unknown }).__app = {
     store: useStore,
-    core: { computePlan, checkPlacement, totalFuel },
+    core: { computePlan, checkPlacement, totalFuel, validatePlanFull },
     data: { AIRCRAFT, POSITIONS, COMPARTMENTS },
   };
 }
