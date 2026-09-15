@@ -1,289 +1,138 @@
-import { FormEvent, useMemo, useState } from "react";
-
-type Field = {
-  key: string;
-  label: string;
-  type?: "number" | "date" | "select";
-  options?: string[];
-};
-
-type RecordItem = {
-  id: string;
-  status: string;
-  notes: string;
-  createdAt: string;
-  [key: string]: string | number;
-};
-
-const project = {
-  "number": 14,
-  "folder": "hxwl/frontend/hxwlfront-14",
-  "framework": "react",
-  "title": "配送任务拖拽排班",
-  "subtitle": "把待分配订单安排给司机，并统计任务数和总重量。",
-  "industry": "物流",
-  "stack": [
-    "React",
-    "Vite",
-    "TypeScript",
-    "Ant Design",
-    "dnd-kit"
-  ],
-  "storageKey": "hxwlfront-14-schedule",
-  "formTitle": "新增待分配订单",
-  "primaryAction": "加入待分配",
-  "entityLabel": "订单",
-  "statuses": [
-    "待分配",
-    "已分配",
-    "已完成"
-  ],
-  "filters": [
-    "全部司机",
-    "刘师傅",
-    "赵师傅",
-    "孙师傅"
-  ],
-  "fields": [
-    {
-      "key": "orderNo",
-      "label": "订单号"
-    },
-    {
-      "key": "driver",
-      "label": "司机",
-      "type": "select",
-      "options": [
-        "刘师傅",
-        "赵师傅",
-        "孙师傅"
-      ]
-    },
-    {
-      "key": "weight",
-      "label": "重量kg",
-      "type": "number"
-    },
-    {
-      "key": "destination",
-      "label": "目的地"
-    }
-  ],
-  "records": [
-    {
-      "orderNo": "ORD-9012",
-      "driver": "刘师傅",
-      "weight": 260,
-      "destination": "浦东",
-      "status": "已分配",
-      "notes": "上午配送"
-    },
-    {
-      "orderNo": "ORD-9031",
-      "driver": "赵师傅",
-      "weight": 140,
-      "destination": "嘉定",
-      "status": "待分配",
-      "notes": "待排班"
-    }
-  ],
-  "metricLabels": [
-    "订单数",
-    "已分配",
-    "总重量"
-  ]
-} as const;
-
-const fields = project.fields as unknown as Field[];
-const statuses: string[] = [...project.statuses];
-
-function createBlank() {
-  return Object.fromEntries(fields.map((field) => [field.key, field.type === "number" ? 0 : ""]));
-}
-
-function loadRecords(): RecordItem[] {
-  const raw = localStorage.getItem(project.storageKey);
-  if (!raw) {
-    return project.records.map((record, index) => ({
-      ...record,
-      id: `seed-${index + 1}`,
-      createdAt: new Date(Date.now() - index * 86400000).toISOString()
-    })) as RecordItem[];
-  }
-  try {
-    return JSON.parse(raw) as RecordItem[];
-  } catch {
-    return [];
-  }
-}
-
-function saveRecords(records: RecordItem[]) {
-  localStorage.setItem(project.storageKey, JSON.stringify(records));
-}
-
-function nextStatus(status: string) {
-  const index = statuses.indexOf(status);
-  return statuses[(index + 1) % statuses.length];
-}
-
-function primaryText(record: RecordItem) {
-  const first = fields[0];
-  const second = fields[1];
-  return [record[first.key], record[second.key]].filter(Boolean).join(" / ") || project.entityLabel;
-}
+// 航班装载与重心校核台 —— 主界面
+import { Alert, Button, Card, Col, Row, Space, Tag } from 'antd';
+import { AIRCRAFT } from './data';
+import { trimSuggestion } from './core';
+import { useStore } from './store';
+import HoldDiagram from './components/HoldDiagram';
+import UldLibrary from './components/UldLibrary';
+import FuelPanel from './components/FuelPanel';
+import SegmentPanel from './components/SegmentPanel';
+import SegmentTable from './components/SegmentTable';
+import EnvelopeChart from './components/EnvelopeChart';
+import StagingPanel from './components/StagingPanel';
 
 export default function App() {
-  const [records, setRecords] = useState<RecordItem[]>(loadRecords);
-  const [form, setForm] = useState<Record<string, string | number>>(createBlank);
-  const [note, setNote] = useState("");
-  const [filter, setFilter] = useState<string>(project.filters[0]);
+  const {
+    plan, locked, staging, officialResult, stagingResult,
+    selectedUld, selectedPos, lastErrors,
+    place, removeAt, loadDemo, resetAll, lock, unlock,
+  } = useStore();
 
-  const filteredRecords = useMemo(() => {
-    if (filter.startsWith("全部")) return records;
-    return records.filter((record) => Object.values(record).includes(filter));
-  }, [filter, records]);
-
-  const metrics = useMemo(() => {
-    const total = records.length;
-    const second = records.filter((record) => record.status === statuses[1]).length;
-    const third = records.filter((record) => record.status === statuses[2]).length;
-    const numberValues = records.flatMap((record) =>
-      fields.filter((field) => field.type === "number").map((field) => Number(record[field.key] || 0))
-    );
-    const sum = numberValues.reduce((acc, value) => acc + value, 0);
-    return [total, second || sum, third || Math.round(sum / Math.max(total, 1))];
-  }, [records]);
-
-  const chartRows = statuses.map((status) => ({
-    status,
-    value: records.filter((record) => record.status === status).length
-  }));
-  const maxChart = Math.max(1, ...chartRows.map((row) => row.value));
-
-  function updateRecords(next: RecordItem[]) {
-    setRecords(next);
-    saveRecords(next);
-  }
-
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const next: RecordItem = {
-      ...form,
-      id: crypto.randomUUID(),
-      status: statuses[0],
-      notes: note || "暂无备注",
-      createdAt: new Date().toISOString()
-    } as RecordItem;
-    updateRecords([next, ...records]);
-    setForm(createBlank());
-    setNote("");
-  }
+  const ok = officialResult.issues.length === 0;
+  const trimTips = officialResult.segments
+    .map((s, i) => trimSuggestion(plan, i))
+    .filter((t): t is string => !!t);
 
   return (
-    <main className="app">
-      <div className="shell">
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">{project.industry}行业前端最小闭环</p>
-            <h1>{project.title}</h1>
-            <p className="subtitle">{project.subtitle}</p>
-          </div>
-          <div className="stack">{project.stack.map((item) => <span className="tag" key={item}>{item}</span>)}</div>
-        </header>
+    <div className="app">
+      <header className="app-header">
+        <div className="app-title">
+          ✈️ 航班装载与重心校核台
+          <span className="flight-info">航班 CA1041 ｜ 机型 {AIRCRAFT.type} ｜ 航路 PEK–PVG–HKG–SIN</span>
+        </div>
+        <Space wrap>
+          {locked ? <Tag color="gold" data-testid="tag-locked">正式方案已锁定</Tag> : <Tag data-testid="tag-editing">计划编制中</Tag>}
+          {staging.active && <Tag color="purple" data-testid="tag-staging">演练中（未确认）</Tag>}
+          <Tag color={ok ? 'green' : 'red'} data-testid="global-status">
+            {ok ? '正式方案：全部约束通过' : `正式方案：${officialResult.issues.length} 项不符`}
+          </Tag>
+          <Button size="small" onClick={loadDemo} data-testid="btn-load-demo">载入演示方案</Button>
+          {locked
+            ? <Button size="small" onClick={unlock} data-testid="btn-unlock">解除锁定</Button>
+            : <Button size="small" onClick={lock} data-testid="btn-lock">锁定为正式方案</Button>}
+          <Button size="small" danger onClick={resetAll} data-testid="btn-reset">重置</Button>
+        </Space>
+      </header>
 
-        <section className="metrics">
-          {project.metricLabels.map((label, index) => (
-            <article className="metric" key={label}>
-              <span>{label}</span>
-              <strong>{metrics[index]}</strong>
-            </article>
-          ))}
-        </section>
+      {lastErrors.length > 0 && (
+        <Alert
+          type="error"
+          showIcon
+          closable
+          className="error-bar"
+          data-testid="error-list"
+          message="不能落位 / 操作被拒绝"
+          description={
+            <ul className="issue-list">
+              {lastErrors.map((e, i) => <li key={i}>{e}</li>)}
+            </ul>
+          }
+        />
+      )}
 
-        <section className="workspace">
-          <form className="panel" onSubmit={handleSubmit}>
-            <h2>{project.formTitle}</h2>
-            <div className="form-grid">
-              {fields.map((field) => (
-                <label key={field.key}>
-                  {field.label}
-                  {field.type === "select" ? (
-                    <select
-                      value={String(form[field.key])}
-                      onChange={(event) => setForm({ ...form, [field.key]: event.target.value })}
-                      required
-                    >
-                      <option value="">请选择</option>
-                      {field.options?.map((option) => <option key={option}>{option}</option>)}
-                    </select>
-                  ) : (
-                    <input
-                      type={field.type || "text"}
-                      value={form[field.key]}
-                      onChange={(event) =>
-                        setForm({ ...form, [field.key]: field.type === "number" ? Number(event.target.value) : event.target.value })
-                      }
-                      required
-                    />
-                  )}
-                </label>
-              ))}
-              <label>
-                备注
-                <textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="填写处理说明或现场备注" />
-              </label>
-              <button type="submit">{project.primaryAction}</button>
+      {trimTips.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          className="error-bar"
+          data-testid="trim-tips"
+          message="配平建议"
+          description={<ul className="issue-list">{trimTips.map((t, i) => <li key={i}>{t}</li>)}</ul>}
+        />
+      )}
+
+      <Row gutter={[12, 12]} className="app-body">
+        <Col xs={24} xl={6}>
+          <Card size="small" title={`机型与燃油（OEW ${AIRCRAFT.oew.toLocaleString('zh-CN')} kg）`}>
+            <FuelPanel />
+          </Card>
+          <Card size="small" title="航段与航程耗油" style={{ marginTop: 12 }}>
+            <SegmentPanel />
+          </Card>
+        </Col>
+
+        <Col xs={24} xl={11}>
+          <Card
+            size="small"
+            title="货舱隔位"
+            extra={
+              <Space>
+                <Button size="small" type="primary" onClick={place} data-testid="btn-place">放入所选舱位</Button>
+                <Button size="small" disabled={!selectedPos} onClick={() => selectedPos && removeAt(selectedPos)} data-testid="btn-remove">
+                  卸下所选舱位
+                </Button>
+              </Space>
+            }
+          >
+            <div className="muted" style={{ marginBottom: 6 }}>
+              当前选择：集装器 <b data-testid="sel-uld">{selectedUld ?? '—'}</b> ｜ 舱位 <b data-testid="sel-pos">{selectedPos ?? '—'}</b>
             </div>
-          </form>
+            <HoldDiagram />
+          </Card>
+          <Card size="small" title="重心包线（●正式方案 ｜ ○演练未确认）" style={{ marginTop: 12 }}>
+            <EnvelopeChart />
+          </Card>
+        </Col>
 
-          <section className="list-panel">
-            <div className="toolbar">
-              <h2>{project.entityLabel}列表</h2>
-              <select value={filter} onChange={(event) => setFilter(event.target.value)}>
-                {project.filters.map((item) => <option key={item}>{item}</option>)}
-              </select>
-            </div>
+        <Col xs={24} xl={7}>
+          <Card size="small" title="集装器库（点击选择，再点舱位落位）">
+            <UldLibrary />
+          </Card>
+          <Card size="small" title="演练区" style={{ marginTop: 12 }}>
+            <StagingPanel />
+          </Card>
+        </Col>
+      </Row>
 
-            <div className="record-grid">
-              {filteredRecords.length === 0 ? <div className="empty">暂无匹配数据</div> : filteredRecords.map((record) => (
-                <article className="record" key={record.id}>
-                  <div className="record-head">
-                    <p className="record-title">{primaryText(record)}</p>
-                    <span className="status">{record.status}</span>
-                  </div>
-                  <div className="details">
-                    {fields.map((field) => (
-                      <span key={field.key}>{field.label}: {record[field.key]}</span>
-                    ))}
-                  </div>
-                  <p className="note">{record.notes}</p>
-                  <div className="actions">
-                    <button type="button" onClick={() => updateRecords(records.map((item) => item.id === record.id ? { ...item, status: nextStatus(item.status) } : item))}>
-                      流转状态
-                    </button>
-                    <button className="secondary" type="button" onClick={() => navigator.clipboard?.writeText(primaryText(record))}>
-                      复制摘要
-                    </button>
-                    <button className="danger" type="button" onClick={() => updateRecords(records.filter((item) => item.id !== record.id))}>
-                      删除
-                    </button>
-                  </div>
-                </article>
-              ))}
-            </div>
+      <Card size="small" title="逐航段重量与重心 —— 正式方案" style={{ marginTop: 12 }}>
+        <SegmentTable result={officialResult} testPrefix="seg-official" />
+        {officialResult.issues.length > 0 && (
+          <Alert
+            style={{ marginTop: 8 }}
+            type="error"
+            showIcon
+            data-testid="official-issues"
+            message="正式方案存在不符项"
+            description={<ul className="issue-list">{officialResult.issues.map((s, i) => <li key={i}>{s}</li>)}</ul>}
+          />
+        )}
+      </Card>
 
-            <div className="mini-chart">
-              {chartRows.map((row) => (
-                <div className="bar" key={row.status}>
-                  <span>{row.status}</span>
-                  <div className="bar-track"><div className="bar-fill" style={{ width: `${(row.value / maxChart) * 100}%` }} /></div>
-                  <strong>{row.value}</strong>
-                </div>
-              ))}
-            </div>
-          </section>
-        </section>
-      </div>
-    </main>
+      {staging.active && stagingResult && (
+        <Card size="small" title="逐航段重量与重心 —— 演练（未确认）" style={{ marginTop: 12 }}>
+          <SegmentTable result={stagingResult} testPrefix="seg-staging" />
+        </Card>
+      )}
+    </div>
   );
 }
